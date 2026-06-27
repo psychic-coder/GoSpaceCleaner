@@ -14,6 +14,7 @@ type Candidate struct {
 	LastAccessed time.Time // most recent atime/mtime found in the tree
 	Regenerable  bool      // true if this is trivially rebuildable (npm install, pod install, etc.)
 	Reason       string    // human-readable justification shown to the user
+	ReclaimCmd   string    // optional: custom shell command to reclaim (e.g. "docker system prune"), instead of trash move
 }
 
 // Detector is the plugin contract every cleanup rule must implement.
@@ -31,7 +32,7 @@ type Detector interface {
 	// Inspect is called only on matched paths. It computes size, last-accessed,
 	// and decides regenerability. This is allowed to be slower since it only
 	// runs on already-matched candidates.
-	Inspect(path string) (*Candidate, error)
+	Inspect(path string) ([]*Candidate, error)
 }
 
 // dirSize walks a directory and sums file sizes. Shared helper for detectors.

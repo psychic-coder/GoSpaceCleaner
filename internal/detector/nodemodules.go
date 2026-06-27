@@ -38,7 +38,7 @@ func (d *NodeModulesDetector) Match(path string, info os.FileInfo) bool {
 	return err == nil
 }
 
-func (d *NodeModulesDetector) Inspect(path string) (*Candidate, error) {
+func (d *NodeModulesDetector) Inspect(path string) ([]*Candidate, error) {
 	size, lastAccessed, err := dirSize(path)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting %s: %w", path, err)
@@ -52,14 +52,14 @@ func (d *NodeModulesDetector) Inspect(path string) (*Candidate, error) {
 		reason += "; parent project touched recently — review before deleting"
 	}
 
-	return &Candidate{
+	return []*Candidate{{
 		Path:         path,
 		SizeBytes:    size,
 		Kind:         d.Name(),
 		LastAccessed: lastAccessed,
 		Regenerable:  true,
 		Reason:       reason,
-	}, nil
+	}}, nil
 }
 
 // gitOrMtimeReference prefers the last commit time in the parent project's

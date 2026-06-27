@@ -29,20 +29,20 @@ func (d *XcodeDerivedDataDetector) Match(path string, info os.FileInfo) bool {
 	return path == derivedDataRoot
 }
 
-func (d *XcodeDerivedDataDetector) Inspect(path string) (*Candidate, error) {
+func (d *XcodeDerivedDataDetector) Inspect(path string) ([]*Candidate, error) {
 	size, lastAccessed, err := dirSize(path)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting %s: %w", path, err)
 	}
 
-	return &Candidate{
+	return []*Candidate{{
 		Path:         path,
 		SizeBytes:    size,
 		Kind:         d.Name(),
 		LastAccessed: lastAccessed,
 		Regenerable:  true,
 		Reason:       "Xcode build cache — regenerated automatically on next build",
-	}, nil
+	}}, nil
 }
 
 // XcodeSimulatorDetector flags unavailable/old iOS simulator runtimes, another
@@ -66,18 +66,18 @@ func (d *XcodeSimulatorDetector) Match(path string, info os.FileInfo) bool {
 	return path == simRoot
 }
 
-func (d *XcodeSimulatorDetector) Inspect(path string) (*Candidate, error) {
+func (d *XcodeSimulatorDetector) Inspect(path string) ([]*Candidate, error) {
 	size, lastAccessed, err := dirSize(path)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting %s: %w", path, err)
 	}
 
-	return &Candidate{
+	return []*Candidate{{
 		Path:         path,
 		SizeBytes:    size,
 		Kind:         d.Name(),
 		LastAccessed: lastAccessed,
 		Regenerable:  true,
 		Reason:       "simulator device data — review individually, `xcrun simctl delete unavailable` is safer than a blanket wipe",
-	}, nil
+	}}, nil
 }

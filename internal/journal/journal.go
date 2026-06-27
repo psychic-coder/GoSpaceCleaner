@@ -13,6 +13,7 @@ import (
 // Entry is one recorded deletion.
 type Entry struct {
 	ID          int64
+	BatchID     string
 	OriginalPath string
 	TrashPath    string // where it actually went (~/.Trash/gospace-<id>-<basename>)
 	SizeBytes    int64
@@ -53,6 +54,7 @@ func Open() (*Journal, error) {
 	schema := `
 	CREATE TABLE IF NOT EXISTS deletions (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		batch_id TEXT NOT NULL,
 		original_path TEXT NOT NULL,
 		trash_path TEXT NOT NULL,
 		size_bytes INTEGER NOT NULL,
@@ -73,11 +75,11 @@ func (j *Journal) Close() error {
 }
 
 // Record logs a completed deletion.
-func (j *Journal) Record(originalPath, trashPath string, sizeBytes int64, kind string) (int64, error) {
+func (j *Journal) Record(batchID, originalPath, trashPath string, sizeBytes int64, kind string) (int64, error) {
 	res, err := j.db.Exec(
-		`INSERT INTO deletions (original_path, trash_path, size_bytes, kind, deleted_at, restored)
-		 VALUES (?, ?, ?, ?, ?, 0)`,
-		originalPath, trashPath, sizeBytes, kind, time.Now(),
+		`INSERT INTO deletions (batch_id, original_path, trash_path, size_bytes, kind, deleted_at, restored)
+		 VALUES (?, ?, ?, ?, ?, ?, 0)`,
+		batchID, originalPath, trashPath, sizeBytes, kind, time.Now(),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("recording journal entry: %w", err)
@@ -91,15 +93,29 @@ func (j *Journal) MarkRestored(id int64) error {
 	return err
 }
 
-// Recent returns the last n non-restored entries, most recent first —
-// what `gospace undo` shows you to pick from.
-func (j *Journal) Recent(n int) ([]Entry, error) {
+// RecentBatch returns all entries from the most recent non-restored reclaim batch.
+func (j *Journal) RecentBatch() ([]Entry, error) {
+	// Find the most recent batch_id that has non-restored entries
+	var batchID string
+	err := j.db.QueryRow(`
+		SELECT batch_id 
+		FROM deletions 
+		WHERE restored = 0 
+		ORDER BY deleted_at DESC 
+		LIMIT 1
+	`).Scan(&batchID)
+	if err == sql.ErrNoRows {
+		return nil, nil // Nothing to undo
+	}
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := j.db.Query(
-		`SELECT id, original_path, trash_path, size_bytes, kind, deleted_at, restored
+		`SELECT id, batch_id, original_path, trash_path, size_bytes, kind, deleted_at, restored
 		 FROM deletions
-		 WHERE restored = 0
-		 ORDER BY deleted_at DESC
-		 LIMIT ?`, n,
+		 WHERE batch_id = ? AND restored = 0
+		 ORDER BY deleted_at DESC`, batchID,
 	)
 	if err != nil {
 		return nil, err
@@ -109,7 +125,7 @@ func (j *Journal) Recent(n int) ([]Entry, error) {
 	var entries []Entry
 	for rows.Next() {
 		var e Entry
-		if err := rows.Scan(&e.ID, &e.OriginalPath, &e.TrashPath, &e.SizeBytes, &e.Kind, &e.DeletedAt, &e.Restored); err != nil {
+		if err := rows.Scan(&e.ID, &e.BatchID, &e.OriginalPath, &e.TrashPath, &e.SizeBytes, &e.Kind, &e.DeletedAt, &e.Restored); err != nil {
 			return nil, err
 		}
 		entries = append(entries, e)

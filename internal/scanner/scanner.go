@@ -15,18 +15,11 @@ type Result struct {
 	Errors     []error
 }
 
-// Scanner walks a root directory and dispatches each visited path to every
-// registered detector concurrently, bounded by a worker pool sized to GOMAXPROCS.
-//
-// Design note: filepath.Walk itself is inherently sequential (it has to be —
-// you can't parallelize "discover children" without first reading the parent).
-// The concurrency win here is in *detector dispatch*: once a directory is found,
-// running N detectors' Match+Inspect against it happens on a worker goroutine
-// instead of blocking the walk. On a deep tree with several detectors, this is
-// where the wall-clock time actually drops.
+
 type Scanner struct {
 	Detectors []detector.Detector
 	Workers   int
+	Progress  func(path string) // optional callback for UI updates
 }
 
 func New(detectors []detector.Detector) *Scanner {
@@ -88,6 +81,10 @@ func (s *Scanner) Scan(root string) (*Result, error) {
 			return nil
 		}
 
+		if s.Progress != nil {
+			s.Progress(path)
+		}
+
 		jobs <- job{path: path, info: info}
 
 		if shouldSkipDescend(path) {
@@ -114,12 +111,16 @@ func (s *Scanner) worker(jobs <-chan job, results chan<- *detector.Candidate, er
 	for j := range jobs {
 		for _, d := range s.Detectors {
 			if d.Match(j.path, j.info) {
-				cand, err := d.Inspect(j.path)
+				cands, err := d.Inspect(j.path)
 				if err != nil {
 					errs <- err
 					continue
 				}
-				results <- cand
+				for _, cand := range cands {
+					if cand != nil {
+						results <- cand
+					}
+				}
 			}
 		}
 	}

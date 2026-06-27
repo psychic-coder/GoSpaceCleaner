@@ -30,20 +30,20 @@ func (d *HomebrewCacheDetector) Match(path string, info os.FileInfo) bool {
 	return path == cacheRoot
 }
 
-func (d *HomebrewCacheDetector) Inspect(path string) (*Candidate, error) {
+func (d *HomebrewCacheDetector) Inspect(path string) ([]*Candidate, error) {
 	size, lastAccessed, err := dirSize(path)
 	if err != nil {
 		return nil, fmt.Errorf("inspecting %s: %w", path, err)
 	}
 
-	return &Candidate{
+	return []*Candidate{{
 		Path:         path,
 		SizeBytes:    size,
 		Kind:         d.Name(),
 		LastAccessed: lastAccessed,
 		Regenerable:  true,
 		Reason:       "Homebrew install cache — safe to clear, prefer `brew cleanup -s` over raw delete",
-	}, nil
+	}}, nil
 }
 
 // DockerReclaimDetector doesn't walk the filesystem at all — it shells out to
@@ -66,35 +66,66 @@ func (d *DockerReclaimDetector) Match(path string, info os.FileInfo) bool {
 	return path == home
 }
 
-func (d *DockerReclaimDetector) Inspect(path string) (*Candidate, error) {
-	cmd := exec.Command("docker", "system", "df", "--format", "{{.Reclaimable}}")
+func (d *DockerReclaimDetector) Inspect(path string) ([]*Candidate, error) {
+	cmd := exec.Command("docker", "system", "df", "--format", "{{.Type}}|{{.Reclaimable}}")
 	out, err := cmd.Output()
 	if err != nil {
 		// Docker not installed or not running — not an error, just nothing to report.
 		return nil, nil
 	}
 
-	var totalBytes int64
+	var candidates []*Candidate
+
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		totalBytes += parseDockerSize(line)
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		
+		typ := strings.TrimSpace(parts[0])
+		reclaimableStr := strings.TrimSpace(parts[1])
+		sizeBytes := parseDockerSize(reclaimableStr)
+
+		if sizeBytes > 0 {
+			cmdStr := "docker system prune"
+			reason := "reclaimable via `docker system prune`"
+			
+			switch typ {
+			case "Images":
+				cmdStr = "docker image prune -a"
+				reason = "reclaimable via `docker image prune -a` — unused images"
+			case "Containers":
+				cmdStr = "docker container prune"
+				reason = "reclaimable via `docker container prune` — stopped containers"
+			case "Local Volumes":
+				cmdStr = "docker volume prune"
+				reason = "reclaimable via `docker volume prune` — unused volumes"
+			case "Build Cache":
+				cmdStr = "docker builder prune"
+				reason = "reclaimable via `docker builder prune` — build cache"
+			}
+
+			candidates = append(candidates, &Candidate{
+				Path:        fmt.Sprintf("docker (%s)", typ),
+				SizeBytes:   sizeBytes,
+				Kind:        d.Name(),
+				Regenerable: true,
+				Reason:      reason,
+				ReclaimCmd:  cmdStr,
+			})
+		}
 	}
 
-	if totalBytes == 0 {
-		return nil, nil
-	}
-
-	return &Candidate{
-		Path:        "docker (managed by Docker daemon, not a filesystem path)",
-		SizeBytes:   totalBytes,
-		Kind:        d.Name(),
-		Regenerable: true,
-		Reason:      "reclaimable via `docker system prune` — stopped containers, dangling images, unused volumes",
-	}, nil
+	return candidates, nil
 }
 
 // parseDockerSize converts strings like "1.2GB" or "340MB" to bytes.
+// It strips suffixes like " (60%)" that `docker system df` sometimes adds.
 func parseDockerSize(s string) int64 {
 	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, " ("); idx != -1 {
+		s = s[:idx]
+	}
 	if s == "" || s == "0B" {
 		return 0
 	}
